@@ -207,6 +207,7 @@
             gap: 8px;
             text-decoration: none;
             color: white;
+            font-size: 0.95rem;
         }
 
         .btn-mp4 { background: #2563eb; }
@@ -301,7 +302,7 @@
                 return;
             }
 
-            // Reset UI
+            // Reset UI states
             errorMsg.style.display = 'none';
             resultCard.style.display = 'none';
             loader.style.display = 'block';
@@ -317,7 +318,7 @@
 
                 if (!response.ok) throw new Error(data.error || 'Failed to process request');
 
-                // Update UI elements
+                // Populate UI elements
                 currentUrl = data.url;
                 document.getElementById('thumbImg').src = data.thumbnail;
                 document.getElementById('mediaTitle').innerText = data.title;
@@ -345,20 +346,28 @@
                     body: JSON.stringify({ url: currentUrl, type: type })
                 });
 
-                if (!response.ok) throw new Error('Download failed');
+                // If response is NOT OK, read the error message as JSON
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Download failed on server');
+                }
 
-                // Get file blob and download
+                // Response IS OK -> Process binary stream (blob), DO NOT call response.json()
                 const blob = await response.blob();
                 const downloadUrl = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = downloadUrl;
+                
+                // Extract filename from response headers or fallback
                 a.download = `LisoDownload_${Date.now()}.${type}`;
+                
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
+                window.URL.revokeObjectURL(downloadUrl);
 
             } catch (err) {
-                showError("Could not download file. Please try again.");
+                showError(err.message || "Could not download file. Please try again.");
             } finally {
                 loader.style.display = 'none';
             }
