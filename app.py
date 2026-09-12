@@ -1,11 +1,11 @@
 import os
 import tempfile
+import glob
 from flask import Flask, render_template, request, jsonify, send_file
 import yt_dlp
 
 app = Flask(__name__)
 
-# Directory to temporarily store downloads
 TEMP_DIR = tempfile.gettempdir()
 
 @app.route('/')
@@ -14,11 +14,11 @@ def index():
 
 @app.route('/fetch-info', methods=['POST'])
 def fetch_info():
-    data = request.json
-    url = data.get('url')
-
-    if not url:
+    data = request.get_json(silent=True)
+    if not data or 'url' not in data:
         return jsonify({'error': 'URL is required'}), 400
+
+    url = data.get('url')
 
     ydl_opts = {
         'quiet': True,
@@ -30,7 +30,6 @@ def fetch_info():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
-            # Format basic metadata
             response_data = {
                 'title': info.get('title', 'Media Content'),
                 'thumbnail': info.get('thumbnail', ''),
@@ -45,14 +44,18 @@ def fetch_info():
 
 @app.route('/download', methods=['POST'])
 def download():
-    data = request.json
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Invalid request body'}), 400
+
     url = data.get('url')
-    download_type = data.get('type') # 'mp4' or 'mp3'
+    download_type = data.get('type')  # 'mp4' or 'mp3'
 
     if not url or not download_type:
         return jsonify({'error': 'Invalid parameters'}), 400
 
-    output_template = os.path.join(TEMP_DIR, '%(title)s.%(ext)s')
+    # Clean filename pattern template
+    output_template = os.path.join(TEMP_DIR, '%(id)s.%(ext)s')
 
     if download_type == 'mp3':
         ydl_opts = {
@@ -63,25 +66,43 @@ def download():
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'quiet': True
+            'quiet': True,
+            'overwrites': True
         }
     else:  # MP4
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'outtmpl': output_template,
-            'quiet': True
+            'quiet': True,
+            'overwrites': True
         }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
+            video_id = info.get('id')
+            title = info.get('title', 'downloaded_media')
             
-            # Adjust extension for mp3 post-processing
-            if download_type == 'mp3':
-                filename = os.path.splitext(filename)[0] + '.mp3'
+            # Find the generated file based on video ID
+            extension = 'mp3' if download_type == 'mp3' else 'mp4'
+            target_file = os.path.join(TEMP_DIR, f"{video_id}.{extension}")
 
-            return send_file(filename, as_attachment=True)
+            if not os.path.exists(target_file):
+                # Fallback search if extension differed during extraction
+                matching_files = glob.glob(os.path.join(TEMP_DIR, f"{video_id}.*"))
+                if matching_files:
+                    target_file = matching_files[0]
+                else:
+                    return jsonify({'error': 'File processing failed on server'}), 500
+
+            # Safe download response with proper attachment headers
+            safe_filename = f"{title}.{extension}".replace('/', '_').replace('\\', '_')
+            return send_file(
+                target_file, 
+                as_attachment=True, 
+                download_name=safe_filename,
+                mimetype='audio/mpeg' if download_type == 'mp3' else 'video/mp4'
+            )
 
     except Exception as e:
         return jsonify({'error': f"Download failed: {str(e)}"}), 500
